@@ -1,0 +1,397 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: "\n    Stack creating a VPC and launch EC2 instances within it.\n    **WARNING** This template creates Amazon EC2 instances with public key authentication..\n    You will be billed for the AWS resources used if you create\n    a stack from this template. **WARNING** This template creates\n    role for creating/modifying seurity group.\n    This role will invoke AWSLambdaBasicExecutionRole, Please check\n    AWS Documentation for details on AWSLambdaBasicExecutionRole."
+
+Parameters:
+  UserEmailTag:
+    Description: 'Email address tag of user creating the stack'
+    MinLength: 14
+    Type: String
+
+  UserLoginTag:
+    Description: 'Login ID tag of user creating the stack'
+    MinLength: 4
+    Type: String
+
+  AvailabilityZone:
+    Description: 'Availability Zone where the Cloud Peak server appliance will be deployed'
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+
+  VolumeSize:
+    Description: 'The size of the root volume for the Cloud Peak server'
+    Type: Number
+    Default: 40
+  
+  IngressIPv4CidrList:
+    Description: 'Allows network access from the following CIDR blocks (comma separated for multiple values).'
+    Type: String
+  
+  InstanceType:
+    Description: 'The Instance Type for Cloud Peak server appliance.'
+    Type: String
+    Default: t3.xlarge
+    AllowedValues:
+    - t2.xlarge
+    - t3.xlarge
+    - t3a.xlarge
+    - c5.xlarge
+  
+  PubKeyName:
+    Description: Name of the public key pair to be used to launch instance
+    Type: AWS::EC2::KeyPair::KeyName
+  
+  VPCSubnetCidr:
+    Description: 'CIDR for the VPC created for Cloud Peak server deployment.'
+    Type: String
+    ConstraintDescription: "Requires a /16 CIDR block which does not start with 10.x"
+    AllowedPattern: "^(?!10\\.)(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){2}(0\\.)(0)(\\/(16))$"
+    Default: '192.168.0.0/16'
+  
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMIxAPPLICATION : "ami-0fb40790da38a32ec"
+    us-east-2:
+      AMIxAPPLICATION : "ami-01364cf0aea3ba777"
+    us-west-1:
+      AMIxAPPLICATION : "ami-0f7a023da15863156"
+    us-west-2:
+      AMIxAPPLICATION : "ami-0a876ff62e47195a6"
+    ca-central-1:
+      AMIxAPPLICATION : "ami-0572c7a0346c4a4fb"
+    eu-central-1:
+      AMIxAPPLICATION : "ami-0152e979c452da078"
+    eu-west-1:
+      AMIxAPPLICATION : "ami-06bfcf7ea924f226e"
+    eu-west-2:
+      AMIxAPPLICATION : "ami-064a7ae8dffdde4b1"
+    eu-west-3:
+      AMIxAPPLICATION : "ami-0fd85a7946313063f"
+    eu-north-1:
+      AMIxAPPLICATION : "ami-050e0885ebf540ad8"
+    ap-northeast-2:
+      AMIxAPPLICATION : "ami-0535100d1854fb5a7"
+    ap-southeast-2:
+      AMIxAPPLICATION : "ami-0f9b3f3d38673b799"
+    ap-northeast-1:
+      AMIxAPPLICATION : "ami-01319a564964b62eb"
+    ap-southeast-1:
+      AMIxAPPLICATION : "ami-0182d627b518b67fe"
+    ap-south-1:
+      AMIxAPPLICATION : "ami-0dda3cc04b970cf36"
+    sa-east-1:
+      AMIxAPPLICATION : "ami-0ca89edb832f7dc3b"
+
+Resources:
+  VPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: !Ref VPCSubnetCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: "default"
+      Tags:
+      - Key: Name
+        Value: !Join ['-', [!Ref UserLoginTag, !Ref AWS::StackName]]
+      - Key: Owner
+        Value: !Ref UserEmailTag
+
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+
+  AttachGateway:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  
+  CPServerSubnet:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Join ['.', [!Select [ '0', !Split [ '.', !Ref VPCSubnetCidr ]], !Select [ '1', !Split [ '.', !Ref VPCSubnetCidr ]], "200.0/24" ]]
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Join ['-', [!Ref UserLoginTag, !Ref AWS::StackName, "Subnet"]]
+      - Key: Owner
+        Value: !Ref UserEmailTag
+
+  CPServRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Description: "The role will be used to deploy Cloud Peak workload instances"
+      RoleName:
+        !Join 
+        - '-'
+        - - !Ref UserLoginTag
+          - !Ref AWS::StackName
+          - "CPServWorkloadDeployRole"
+      AssumeRolePolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+
+  CPServInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      InstanceProfileName:
+        !Join 
+        - '-'
+        - - !Ref UserLoginTag
+          - !Ref AWS::StackName
+          - "CPServInstanceProfile"
+      Path: "/"
+      Roles: 
+      - !Ref CPServRole
+
+  CPServRolePolicies:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: 
+        !Join 
+        - '-'
+        - - !Ref UserLoginTag
+          - "CPServWorkloadDeployPolicies"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:*
+              - sts:*
+              - iam:*
+              - logs:DescribeLogGroups
+              - logs:GetLogEvents
+              - logs:ListTagsLogGroup
+            Resource: '*'
+      Roles:
+      - !Ref CPServRole
+
+  RouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+  
+  InternetRoute:
+    Type: "AWS::EC2::Route"
+    DependsOn: AttachGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+  
+  SubnetRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref CPServerSubnet
+      RouteTableId: !Ref RouteTable
+
+  LambdaToAcmRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Description: "Allows the lambda custom resource to create a custom security group"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaExecutionRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+        - PolicyName: LambdaCreateSg
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateSecurityGroup'
+                  - 'ec2:AuthorizeSecurityGroupIngress'
+                  - 'ec2:AuthorizeSecurityGroupEgress'
+                  - 'ec2:RevokeSecurityGroupEgress'
+                  - 'ec2:DeleteSecurityGroup'
+                Resource: '*'
+
+  LambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaToAcmRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+          import urllib3
+          
+          def send_response(event, context, response_status, response_data, reason, physical_resource_id=None, no_echo=False):
+              http = urllib3.PoolManager()
+              response_body = {
+                  'Status': response_status,
+                  'Reason': reason,
+                  'PhysicalResourceId': physical_resource_id,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'NoEcho': no_echo, 'Data': response_data
+              }
+              json_response_body = json.dumps(response_body)
+              r = http.request('PUT', event['ResponseURL'], body=json_response_body)
+          
+          def on_create(event, context):
+              try:
+                  ingress_sec_group_list = [ip.strip() for ip in list(os.environ['IngressIPv4CidrList'].split(","))]
+                  ingress_sec_group_list.append(os.environ['VPCCidr'])
+
+                  vpc_id = os.environ['VpcId']
+                  client = boto3.client('ec2')
+                  response = client.create_security_group(
+                      GroupName='CPServerSecGroup',
+                      Description='Security group for Cloud Peak Server',
+                      VpcId=vpc_id
+                  )
+                  security_group_id = response['GroupId']                
+                  ingress_list = []
+                  for ip in ingress_sec_group_list:
+                    if ip == os.environ['VPCCidr']:
+                      ingress_list.append({
+                        'IpProtocol': 'udp',
+                        'FromPort': 0,
+                        'ToPort': 65535,
+                        'IpRanges': [{'CidrIp': ip}]
+                      })
+                    ingress_list.extend([{
+                      'IpProtocol': 'tcp',
+                      'FromPort': 0,
+                      'ToPort': 65535,
+                      'IpRanges': [{'CidrIp': ip}]
+                    },
+                    {
+                      'IpProtocol': 'icmp',
+                      'FromPort': -1,
+                      'ToPort': -1,
+                      'IpRanges': [{'CidrIp': ip}]
+                    }])
+                  client.authorize_security_group_ingress(
+                      GroupId=security_group_id,
+                      IpPermissions=ingress_list
+                  )
+                  data = {"SecGroupId": security_group_id}
+                  send_response(event, context, 'SUCCESS', data, 'SecGroup Created', security_group_id, False)
+              except Exception as e:
+                  send_response(event, context, 'FAILED', {}, str(e), 'None', False)
+          
+          def on_delete(event, context):
+            try:
+              client = boto3.client('ec2')
+              response = client.delete_security_group(
+                  GroupId=event['PhysicalResourceId']
+              )
+              send_response(event, context, 'SUCCESS', {}, 'SecGroup deleted', 'None', False)
+            except Exception as e:
+              send_response(event, context, 'FAILED', {}, str(e), 'None', False)
+          
+          def lambda_handler(event, context):
+              if event['RequestType'] == 'Delete':
+                  on_delete(event, context)
+              if event['RequestType'] == 'Create':
+                  on_create(event, context)
+      
+      Runtime: python3.7
+      Environment:
+        Variables:
+          IngressIPv4CidrList: !Ref IngressIPv4CidrList
+          VPCCidr: !Ref VPCSubnetCidr
+          Region: !Ref AWS::Region
+          VpcId: !Ref VPC
+      Timeout: 30
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref UserLoginTag, !Ref AWS::StackName,"SecGroup" ]]
+        - Key: Owner
+          Value: !Ref UserEmailTag
+
+  VpcDefaultSecurityGroupEgressRemove:
+    Type: "AWS::EC2::SecurityGroupEgress"
+    Properties:    
+      GroupId:
+        Fn::GetAtt: [VPC, DefaultSecurityGroup]
+      IpProtocol: icmp
+      FromPort: "-1"
+      ToPort: "-1"
+      CidrIp: "127.0.0.1/32"
+      Description: "Effectively no access"
+  
+  CPServerSecurityGroup:
+    Type: "Custom::CustomSG"
+    Properties:
+      ServiceToken: !GetAtt LambdaFunction.Arn
+      GroupName: CPServerSG
+      GroupDescription: "Custom Security Group for CP Server"
+
+  ElasticIP:
+    Type: "AWS::EC2::EIP"
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref CPServer
+  
+  CPServer:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      SecurityGroupIds:
+        - !Ref CPServerSecurityGroup
+      SubnetId: !Ref CPServerSubnet
+      InstanceType: !Ref InstanceType
+      AvailabilityZone: !Ref AvailabilityZone
+      IamInstanceProfile: !Ref CPServInstanceProfile
+      ImageId: !FindInMap 
+        - RegionMap
+        - !Ref AWS::Region
+        - AMIxAPPLICATION
+      KeyName: !Ref PubKeyName
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sda1"
+          Ebs:
+            VolumeSize: !Ref VolumeSize
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: 
+            !Join 
+            - '-'
+            - - !Ref UserLoginTag
+              - "CPServer"
+              - !FindInMap
+                - RegionMap
+                - !Ref AWS::Region
+                - AMIxAPPLICATION
+        - Key: Owner
+          Value: !Ref UserEmailTag
+
+Outputs:
+  PublicIp:
+    Value:
+      Fn::GetAtt:
+        - CPServer
+        - PublicIp
+    Description: "The Public IP of Cloud Peak Server Appliance"
+  ElasticIp:
+    Value: !Ref ElasticIP
+    Description: "The Elastic IP of Cloud Peak Server Appliance"
