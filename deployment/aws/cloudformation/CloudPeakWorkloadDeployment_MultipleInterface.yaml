@@ -1,0 +1,351 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: "\n    Stack creating a VPC and launch EC2 instances with multiple network interfaces. The VPC created from the template will be peered with the VPC for CloudPeak Management.\n    **WARNING** This template creates Amazon EC2 instances with public key authentication.\n    You will be billed for the AWS resources used if you create\n    a stack from this template. **WARNING** This template creates\n    role for creating/modifying EC2 instances.\n    This role will invoke AWSLambdaBasicExecutionRole, Please check\n    AWS Documentation for details on AWSLambdaBasicExecutionRole."
+
+Parameters:
+  UserEmailTag:
+    Description: 'Email address tag of user creating the stack'
+    MinLength: 14
+    Type: String
+
+  UserLoginTag:
+    Description: 'Login ID tag of user creating the stack'
+    MinLength: 4
+    Type: String
+  
+  InstanceCount:
+    Type: Number
+    Description: "The number of workload instances to be deployed"
+    Default: 2
+  
+  PubKey:
+    Description: Name of the public key pair to be used to launch instance
+    Type: AWS::EC2::KeyPair::KeyName
+
+  CPServerVPCID:
+    Description: "VPC reference for the CloudPeak server"
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-ref
+
+  CPServerSubnetCidr:
+    Description: 'CIDR for the CloudPeak Server VPC.'
+    Type: String
+    ConstraintDescription: "Requires a /16 CIDR block which does not start with 10.x"
+    AllowedPattern: "^(?!10\\.)(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){2}(0\\.)(0)(\\/(16))$"
+
+  VPCSubnetCidr:
+    Description: 'CIDR for the VPC created for Cloud Peak workload deployment.'
+    Type: String
+    ConstraintDescription: "Requires a /16 CIDR block which does not start with 10.x"
+    AllowedPattern: "^(?!10\\.)(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){2}(0\\.)(0)(\\/(16))$"
+    Default: '193.168.0.0/16'
+  
+  InstanceType:
+    Description: 'The Instance Type for CloudPeak workload.'
+    Type: String
+    Default: t3.xlarge
+
+  AvailabilityZone:
+    Description: 'Availability Zone where the CloudPeak workload instances will be deployed'
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMIxAPPLICATION : "ami-0628ec421c30b2ba3"
+    us-east-2:
+      AMIxAPPLICATION : "ami-0b03f59b03a4b8921"
+    us-west-1:
+      AMIxAPPLICATION : "ami-0fd5c1ef4281cda42"
+    us-west-2:
+      AMIxAPPLICATION : "ami-02c50d0c0102ae2bf"
+    ca-central-1:
+      AMIxAPPLICATION : "ami-071bc06b66cf6834c"
+    eu-central-1:
+      AMIxAPPLICATION : "ami-07f0285ce21d75e59"
+    eu-west-1:
+      AMIxAPPLICATION : "ami-090e8ee7456ce8f2e"
+    eu-west-2:
+      AMIxAPPLICATION : "ami-07955a7d784ffe1d6"
+    eu-west-3:
+      AMIxAPPLICATION : "ami-0b2bdbf71f23beb8f"
+    eu-north-1:
+      AMIxAPPLICATION : "ami-0988689cd4dabc05b"
+    ap-northeast-2:
+      AMIxAPPLICATION : "ami-01f9aa2c24380d44c"
+    ap-southeast-2:
+      AMIxAPPLICATION : "ami-07731938d523694ba"
+    ap-northeast-1:
+      AMIxAPPLICATION : "ami-05f8c73a3fbd26fb7"
+    ap-southeast-1:
+      AMIxAPPLICATION : "ami-0af145a9ab958c9a4"
+    ap-south-1:
+      AMIxAPPLICATION : "ami-0973ee66f22cdba64"
+    sa-east-1:
+      AMIxAPPLICATION : "ami-07065b08afbe889c4"
+
+Resources:
+  VPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: !Ref VPCSubnetCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: "default"
+      Tags:
+      - Key: Name
+        Value: !Join ['-', [!Ref UserLoginTag, !Ref AWS::StackName]]
+      - Key: Owner
+        Value: !Ref UserEmailTag
+  
+  CPWorkloadSubnetMgmt:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Join ['.', [!Select [ '0', !Split [ '.', !Ref VPCSubnetCidr ]], !Select [ '1', !Split [ '.', !Ref VPCSubnetCidr ]], "200.0/24" ]]
+      MapPublicIpOnLaunch: false
+      Tags:
+      - Key: Name
+        Value: !Join ['-', [!Ref UserLoginTag, !Ref AWS::StackName, "Subnet"]]
+      - Key: Owner
+        Value: !Ref UserEmailTag
+
+  CPWorkloadSubnetTest:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Join ['.', [!Select [ '0', !Split [ '.', !Ref VPCSubnetCidr ]], !Select [ '1', !Split [ '.', !Ref VPCSubnetCidr ]], "201.0/24" ]]
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Join ['-', [!Ref UserLoginTag, !Ref AWS::StackName, "Subnet"]]
+      - Key: Owner
+        Value: !Ref UserEmailTag
+  
+  RouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+  
+  RouteTableTest:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC
+
+  SubnetRouteTableAssociationMgmt:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref CPWorkloadSubnetMgmt
+      RouteTableId: !Ref RouteTable
+
+  SubnetRouteTableAssociationTest:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref CPWorkloadSubnetTest
+      RouteTableId: !Ref RouteTable
+
+  LambdaToAcmRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Description: "Allows the lambda custom resource to create multiple instances"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaExecutionRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+        - PolicyName: EC2Policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:RunInstances'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:DescribeVpcs'
+                  - 'ec2:DescribeInstanceStatus'
+                  - 'ec2:TerminateInstances'
+                  - 'ec2:CreateTags'
+                Resource: '*'
+
+  VPCPeeringConnection:
+    Type: 'AWS::EC2::VPCPeeringConnection'
+    Properties:
+      VpcId: !Ref VPC
+      PeerVpcId: !Ref CPServerVPCID
+  
+  VPCPeeringRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      DestinationCidrBlock: !Ref CPServerSubnetCidr
+      VpcPeeringConnectionId: !Ref VPCPeeringConnection
+      RouteTableId: !Ref RouteTable
+  
+  VpcDefaultSecurityGroupEgressRemove:
+    Type: "AWS::EC2::SecurityGroupEgress"
+    Properties:    
+      GroupId:
+        Fn::GetAtt: [VPC, DefaultSecurityGroup]
+      IpProtocol: icmp
+      FromPort: "-1"
+      ToPort: "-1"
+      CidrIp: "127.0.0.1/32"
+      Description: "Effectively no access"
+  
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from CloudPeak Server
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !Ref VPCSubnetCidr
+        - IpProtocol: udp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !Ref VPCSubnetCidr
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: !Ref VPCSubnetCidr
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !Ref CPServerSubnetCidr
+        - IpProtocol: udp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !Ref CPServerSubnetCidr
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: !Ref CPServerSubnetCidr
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+  
+  LambdaFunctionCreateInstances:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaToAcmRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+          import urllib3
+          import re
+          
+          def send_response(event, context, response_status, response_data, reason, physical_resource_id=None, no_echo=False):
+              http = urllib3.PoolManager()
+              response_body = {
+                  'Status': response_status,
+                  'Reason': reason,
+                  'PhysicalResourceId': physical_resource_id,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'NoEcho': no_echo, 'Data': response_data
+              }
+              json_response_body = json.dumps(response_body)
+              r = http.request('PUT', event['ResponseURL'], body=json_response_body)
+          
+          def on_create(event, context):
+            try:
+              client = boto3.client('ec2')
+              instances = client.run_instances(
+                BlockDeviceMappings=[
+                {
+                  'DeviceName': '/dev/sda1',
+                  'Ebs': {
+                    'DeleteOnTermination': True,
+                    'VolumeSize': 8
+                  },
+                },],
+                ImageId=os.environ['ImageId'],
+                KeyName=os.environ['KeyName'],
+                MaxCount=int(os.environ['InstanceCount']),
+                MinCount=int(os.environ['InstanceCount']),
+                InstanceType=os.environ['InstanceType'],
+                NetworkInterfaces=[
+                  {'SubnetId': os.environ['WLVPCSubnetMgmt'],'DeviceIndex':0,'Groups':[os.environ['SecGroupId']],'DeleteOnTermination': True},
+                  {'SubnetId': os.environ['WLVPCSubnetTest'],'DeviceIndex':1,'Groups':[os.environ['SecGroupId']],'DeleteOnTermination': True},],
+                InstanceInitiatedShutdownBehavior='terminate',
+                TagSpecifications=[{'ResourceType': 'instance','Tags':[
+                  {'Key':'Name','Value':"%s-%s-%s"%(os.environ['UserLoginTag'],"CPWorkLoad",os.environ['StackName'])},
+                  {'Key':'Owner','Value':os.environ['UserEmailID']},]},])
+              instance_id_list = []
+              instance_ip_list = []
+              for instance_count in range(len(instances["Instances"])):
+                instance_id_list.append(instances["Instances"][instance_count]["InstanceId"])
+                instance_ip_list.append(instances["Instances"][instance_count]["PrivateIpAddress"])
+              data = {"InstanceIds": ';'.join(instance_id_list),"InstancePrivateIPs":';'.join(instance_ip_list)}
+              send_response(event, context, 'SUCCESS', data, 'Instances Created',':'.join(instance_id_list))
+            except Exception as e:
+              send_response(event, context, 'FAILED', {}, str(e), 'None', False)
+          
+          def on_delete(event, context):
+            try:
+              client = boto3.client('ec2')
+              client.terminate_instances(InstanceIds=event['PhysicalResourceId'].split(':'))
+              send_response(event, context, 'SUCCESS', {}, 'Instances terminated', 'None', False)
+            except Exception as e:
+              send_response(event, context, 'FAILED', {}, str(e), 'None', False)
+          
+          def lambda_handler(event, context):
+            if event['RequestType'] == 'Delete':
+              on_delete(event, context)
+            if event['RequestType'] == 'Create':
+              on_create(event, context)
+      
+      Runtime: python3.7
+      Environment:
+        Variables:
+          ImageId: !FindInMap 
+            - RegionMap
+            - !Ref AWS::Region
+            - AMIxAPPLICATION
+          InstanceType: !Ref InstanceType
+          InstanceCount: !Ref InstanceCount
+          WLVPCSubnetMgmt: !Ref CPWorkloadSubnetMgmt
+          WLVPCSubnetTest: !Ref CPWorkloadSubnetTest
+          KeyName: !Ref PubKey
+          SecGroupId: !Ref InstanceSecurityGroup
+          UserLoginTag: !Ref UserLoginTag
+          UserEmailID: !Ref UserEmailTag
+          StackName: !Ref AWS::StackName
+      Timeout: 30
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref UserLoginTag, !Ref AWS::StackName,"EC2Instances" ]]
+        - Key: Owner
+          Value: !Ref UserEmailTag
+
+  EC2Instances:
+    Type: "Custom::EC2Instances"
+    Properties:
+      ServiceToken: !GetAtt LambdaFunctionCreateInstances.Arn
+  
+Outputs:
+  PrivateIPs:
+    Value: !GetAtt EC2Instances.InstancePrivateIPs
