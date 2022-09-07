@@ -7,7 +7,7 @@ Welcome to the GitHub repository for **Keysight CloudPeak Deployment Templates**
 
 Choose from the following supported platforms:
 
-[![aws](deployment/images/aws.jpg)](deployment/aws)
+[![aws](images/aws.jpg)](deployment/aws)
 
 
 
